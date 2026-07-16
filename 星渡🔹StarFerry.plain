@@ -36,17 +36,17 @@ proxies:
   - name: "🇯🇵 JP Softbank PL"
     type: vless
     server: 45.192.200.175
-    port: 34292
-    uuid: 2fa3dc0b-0e56-4920-99b5-77d2d57722a0
+    port: 29298
+    uuid: 54c0b540-8419-4f7c-9d93-5223e44d4cca
     network: tcp
     tls: true
     udp: true
-    servername: acck-jp.999329.xyz
+    servername: store.apple.com
     client-fingerprint: chrome
     flow: xtls-rprx-vision
     reality-opts:
-      public-key: "ZjfNCLKirOfn7xx70qZ74wzN5Pu54xAYyptGk2GKR20"
-      short-id: "11b03e94"
+      public-key: "E3Ru0NMp0mkB6c8tDSWtCezKmzJAFUtREDSzh6B3UF4"
+      short-id: "eb51374d"
 
 proxy-groups:
   - name: "节点选择"
