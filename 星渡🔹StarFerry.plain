@@ -520,6 +520,8 @@ rules:
   - RULE-SET,twitter_ip,Twitter,no-resolve
   - DOMAIN-SUFFIX,x.com,Twitter
   - RULE-SET,pikpak,PikPak
+  - DOMAIN-SUFFIX,cdn.zhezhi.art,Emby
+  - DOMAIN-SUFFIX,emby101.origamiart.uk,Emby
   - DOMAIN-SUFFIX,emos.best,Emby
   - DOMAIN-SUFFIX,mobaiemby.site,Emby
   - RULE-SET,emby,Emby
