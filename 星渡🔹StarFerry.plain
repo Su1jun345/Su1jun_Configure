@@ -48,22 +48,22 @@ proxies:
     pblic-key: "E3Ru0NMp0mkB6c8tDSWtCezKmzJAFUtREDSzh6B3UF4"
     short-id: "eb51374d"
 
-- name: "🇺🇸 US CloneCloud PL"
-  type: vless
-  server: 117.55.237.59
-  port: 31263
-  uuid: 26b770e6-1fdf-4005-9e9b-48371f0694d7
-  network: tcp
-  tls: true
-  udp: true
-  servername: s0.awsstatic.com
-  client-fingerprint: chrome
-  flow: xtls-rprx-vision
-  packet-encoding: xudp
-  skip-cert-verify: false
-  reality-opts:
-  public-key: "TFH6_srMZ33ek_hf_1qAw1ZRu_C7oDoV1VYkMMIMjY"
-  short-id: "e914d833"
+ - name: "🇺🇸 US CloneCloud PL"
+   type: vless
+   server: 117.55.237.59
+   port: 31263
+   uuid: 26b770e6-1fdf-4005-9e9b-48371f0694d7
+   network: tcp
+   tls: true
+   udp: true
+   servername: s0.awsstatic.com
+   client-fingerprint: chrome
+   flow: xtls-rprx-vision
+   packet-encoding: xudp
+   skip-cert-verify: false
+   reality-opts:
+   public-key: "TFH6_srMZ33ek_hf_1qAw1ZRu_C7oDoV1VYkMMIMjY"
+   short-id: "e914d833"
 
 proxy-groups:
   - name: "节点选择"
