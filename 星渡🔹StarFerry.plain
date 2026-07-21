@@ -45,8 +45,8 @@ proxies:
     client-fingerprint: chrome
     flow: xtls-rprx-vision
     reality-opts:
-      public-key: "E3Ru0NMp0mkB6c8tDSWtCezKmzJAFUtREDSzh6B3UF4"
-      short-id: "eb51374d"
+    pblic-key: "E3Ru0NMp0mkB6c8tDSWtCezKmzJAFUtREDSzh6B3UF4"
+    short-id: "eb51374d"
 
 - name: "🇺🇸 US CloneCloud PL"
   type: vless
