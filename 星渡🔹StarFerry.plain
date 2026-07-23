@@ -549,6 +549,7 @@ rules:
   - RULE-SET,emby_ip,Emby,no-resolve
   - RULE-SET,spotify,Spotify
   - DOMAIN-KEYWORD,torrent,漏网之鱼
+  - DOMAIN-SUFFIX,qbdp.cc,DIRECT
   - DOMAIN-SUFFIX,999329.xyz,DIRECT
   - DOMAIN-SUFFIX,222329.xyz,DIRECT
   - DOMAIN-SUFFIX,gy.aytplus.top,DIRECT
