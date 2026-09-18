@@ -28,7 +28,7 @@ WidgetMetadata = {
 
     globalParams: [
         {
-            name: "traktUser",
+            name: "Su1jun345",
             title: "Su1jun345",
             type: "input",
             value: ""
