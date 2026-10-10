@@ -35,7 +35,7 @@ var WidgetMetadata = {
       retryCount: 0,
       params: [
         {
-          name: "playlist_url", label: "https://iptv.yang-1989.xyz/playlist.m3u", type: "string", required: false, defaultValue: "",
+          name: "playlist_url", label: "http://iptv.cqshushu.com/index.php?s=1UX9rKSBgNfilf2PbanbPA&t=migu&channels=1&format=m3u", type: "string", required: false, defaultValue: "",
           description: "首次填写并运行成功后自动保存；下次可留空，使用上次保存的地址。填写新地址并运行成功可替换订阅。",
           placeholders: [{
             title: "公开频道示例：IPTV-org 中国",
