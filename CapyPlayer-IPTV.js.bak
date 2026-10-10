@@ -1,0 +1,990 @@
+/*
+ * CapyPlayer IPTV 1.1.0
+ * Install this script as a widget, then set playlist_url in the module parameters.
+ * No account or private subscription is embedded in this file.
+ * Contract: https://capyplayer.feifeiduck.com/zh/dev/widget/widgetdev
+ */
+var WidgetMetadata = {
+  id: "capyplayer.iptv",
+  title: "IPTV 电视直播",
+  description: "IPTV 直播：多订阅、分类、常看频道、多线路、节目单和台标美化。",
+  author: "最优解",
+  version: "1.1.0",
+  globalParams: [
+    {
+      name: "logo_style", label: "台标样式", type: "enum", defaultValue: "saved",
+      description: "居中完整显示公开台标。深色适合白色台标，浅色适合黑色台标。",
+      enumOptions: [
+        { title: "沿用上次（默认深色）", value: "saved" },
+        { title: "深色卡片", value: "dark" },
+        { title: "浅色卡片", value: "light" },
+        { title: "黑色卡片", value: "black" },
+        { title: "藏蓝卡片", value: "navy" },
+        { title: "原始台标", value: "original" }
+      ]
+    }
+  ],
+  modules: [
+    {
+      id: "channels",
+      title: "直播频道",
+      type: "media_list",
+      functionName: "getChannels",
+      cacheDuration: 60,
+      timeoutSeconds: 30,
+      retryCount: 0,
+      params: [
+        {
+          name: "playlist_url", label: "直播订阅地址", type: "string", required: false, defaultValue: "",
+          description: "首次填写并运行成功后自动保存；下次可留空，使用上次保存的地址。填写新地址并运行成功可替换订阅。",
+          placeholders: [{
+            title: "公开频道示例：IPTV-org 中国",
+            value: "https://iptv-org.github.io/iptv/countries/cn.m3u"
+          }]
+        },
+        {
+          name: "group_filter", label: "分组关键词（选填）", type: "string", defaultValue: "",
+          description: "例如：央视、卫视。留空显示全部分组。"
+        },
+        {
+          name: "keyword", label: "频道关键词（选填）", type: "string", defaultValue: "",
+          description: "例如：CCTV、新闻。按频道名称搜索，不区分大小写。"
+        },
+        {
+          name: "sort_order", label: "排列方式", type: "enum", defaultValue: "source",
+          enumOptions: [{ title: "订阅原顺序", value: "source" }, { title: "频道名称", value: "name" }]
+        },
+        { name: "page_size", label: "每页频道数", type: "number", defaultValue: 100 },
+        {
+          name: "subscription_headers", label: "订阅请求头 JSON（选填）", type: "string", defaultValue: "",
+          description: '仅用于下载订阅，例如 {"User-Agent":"MyPlayer"}。通常留空。'
+        },
+        {
+          name: "playback_headers", label: "播放请求头 JSON（选填）", type: "string", defaultValue: "",
+          description: '用于所有频道播放，例如 {"Referer":"https://example.com/"}。通常留空。'
+        },
+        { name: "page", label: "页码", type: "page", defaultValue: 1 }
+      ]
+    },
+    {
+      id: "search", title: "搜索频道", type: "media_list", functionName: "search",
+      description: "搜索整个已保存的订阅，不限于首页显示的频道。",
+      cacheDuration: 30, timeoutSeconds: 30, retryCount: 0,
+      params: [
+        { name: "keyword", label: "频道名称", type: "string", required: true, description: "例如 Love Nature、Clarity、CCTV 1。" },
+        { name: "page", label: "页码", type: "page", defaultValue: 1 }
+      ]
+    }
+  ],
+  search: {
+    title: "搜索频道", functionName: "search",
+    params: [
+      { name: "keyword", label: "频道名称", title: "频道名称", type: "string", defaultValue: "" },
+      { name: "page", label: "页码", type: "page", defaultValue: 1 }
+    ]
+  }
+};
+
+// Shared configuration is remembered once and reused by every list and search.
+WidgetMetadata.globalParams = WidgetMetadata.globalParams.concat([
+  { name: "category_filter", label: "频道分类", type: "enum", defaultValue: "all", enumOptions: [
+    { title: "全部", value: "all" }, { title: "体育", value: "sports" }, { title: "4K / UHD", value: "uhd" },
+    { title: "纪录片", value: "documentary" }, { title: "央视", value: "cctv" },
+    { title: "卫视", value: "satellite" }, { title: "新闻", value: "news" }, { title: "少儿", value: "kids" }
+  ] },
+  { name: "merge_channels", label: "同台合并", type: "enum", defaultValue: "saved", enumOptions: [
+    { title: "沿用上次（首次不合并）", value: "saved" }, { title: "合并同台线路", value: "on" }, { title: "保留订阅条目", value: "off" }
+  ] },
+  { name: "preferred_quality", label: "初次默认线路", type: "enum", defaultValue: "saved", enumOptions: [
+    { title: "沿用上次", value: "saved" }, { title: "订阅顺序", value: "source" },
+    { title: "优先 4K / UHD", value: "uhd" }, { title: "优先高清", value: "hd" }
+  ] },
+  { name: "favorite_channels", label: "常看频道名单（选填）", type: "string", defaultValue: "",
+    description: '一行一个名称或关键词，例如 Sky Sports。填写 [] 清空；留空沿用上次。' },
+  { name: "name_aliases", label: "频道别名 JSON（选填）", type: "string", defaultValue: "",
+    description: '{"原频道名":"显示名称"}，也可用 tvg-id 作键。填写 {} 清空；留空沿用上次。' },
+  { name: "clean_names", label: "整理频道名称", type: "enum", defaultValue: "saved", enumOptions: [
+    { title: "沿用上次（首次开启）", value: "saved" }, { title: "整理空格与线路标记", value: "on" }, { title: "原始名称", value: "off" }
+  ] },
+  { name: "fallback_logo_url", label: "备用台标地址（选填）", type: "string", defaultValue: "",
+    description: "缺少台标时使用的图片。留空沿用上次；填写 default 恢复默认电视图标。" },
+  { name: "sources_json", label: "多订阅 JSON（选填）", type: "string", defaultValue: "",
+    description: '[{"name":"订阅一","url":"https://example.com/list.m3u"}]。成功后保存，最多 8 个；留空沿用上次。' },
+  { name: "epg_mode", label: "节目单显示", type: "enum", defaultValue: "saved", enumOptions: [
+    { title: "沿用上次（首次详情）", value: "saved" }, { title: "详情中显示", value: "detail" },
+    { title: "标题与详情中显示", value: "title" }, { title: "关闭", value: "off" }
+  ] },
+  { name: "epg_url", label: "节目单 XMLTV 地址（选填）", type: "string", defaultValue: "",
+    description: "留空沿用上次或使用 M3U 声明的地址；填写 auto 恢复自动读取。需返回未压缩 XML 文本。" },
+  { name: "epg_headers", label: "节目单请求头 JSON（选填）", type: "string", defaultValue: "",
+    description: "只用于手填的节目单地址，不沿用订阅或播放凭据；填写 {} 清空。" },
+  { name: "epg_timezone", label: "节目时间显示时区", type: "enum", defaultValue: "saved", enumOptions: [
+    { title: "沿用上次（首次北京时间）", value: "saved" }, { title: "北京时间 UTC+8", value: "+0800" },
+    { title: "UTC", value: "+0000" }, { title: "设备本地时间", value: "local" }
+  ] }
+]);
+WidgetMetadata.modules[0].timeoutSeconds = 90;
+WidgetMetadata.modules[1].timeoutSeconds = 90;
+[
+  ["sports", "体育频道", "getSportsChannels"], ["uhd", "4K / UHD 频道", "getUHDChannels"],
+  ["documentary", "纪录片频道", "getDocumentaryChannels"], ["cctv", "央视频道", "getCCTVChannels"],
+  ["satellite", "卫视频道", "getSatelliteChannels"], ["news", "新闻频道", "getNewsChannels"],
+  ["kids", "少儿频道", "getKidsChannels"], ["favorites", "常看频道", "getFavoriteChannels"],
+  ["multiline", "同台多线路", "getMultiLineChannels"]
+].forEach(function (entry) {
+  WidgetMetadata.modules.push({
+    id: entry[0], title: entry[1], type: "media_list", functionName: entry[2],
+    cacheDuration: 60, timeoutSeconds: 90, retryCount: 0,
+    params: [{ name: "page", label: "页码", type: "page", defaultValue: 1 }]
+  });
+});
+WidgetMetadata.modules.push({
+  id: "categories", title: "频道分类", type: "category", functionName: "getCategories",
+  cacheDuration: 3600, params: []
+});
+
+// This virtual URL is decoded locally by loadDetail, never requested over HTTP.
+var IPTV_DETAIL_PREFIX = "https://capyplayer-iptv.invalid/channel?data=";
+var IPTV_SUBSCRIPTION_KEY = "capyplayer.iptv.savedSubscription.v1";
+var IPTV_PLAYLIST_CACHE_KEY = "capyplayer.iptv.playlistCache.v1";
+var IPTV_SETTINGS_KEY = "capyplayer.iptv.settings.v1";
+var IPTV_DEFAULT_LOGO = "https://api.iconify.design/mdi/television.svg?color=%2395A7C4";
+WidgetMetadata.icon = "https://wsrv.nl/?url=" + encodeURIComponent(IPTV_DEFAULT_LOGO) +
+  "&w=256&h=256&fit=contain&bg=23324B&output=png";
+
+// Only public static logo hosts are sent to the image resize service. Playlist
+// URLs, stream URLs, request headers and signed/private logo queries stay local.
+var IPTV_PUBLIC_LOGO_HOSTS = [
+  "raw.githubusercontent.com", "upload.wikimedia.org", "static.wikia.nocookie.net",
+  "i.imgur.com", "i.ibb.co", "iptvboss.xyz", "provider-static.plex.tv",
+  "images.pluto.tv", "sports.cbsimg.net", "m.media-amazon.com", "image.xumo.com",
+  "logo.m3uassets.com", "assets.golfchannel.com", "moviespheregold.com",
+  "images.sr.roku.com", "tvpnlogopus.samsungcloud.tv", "tvpnlogopeu.samsungcloud.tv"
+];
+
+function iptvText(value) {
+  return value == null ? "" : String(value).trim();
+}
+
+async function iptvReadSubscription() {
+  if (typeof Widget === "undefined" || !Widget.storage) return null;
+  try {
+    var raw;
+    if (typeof Widget.storage.getAsync === "function") raw = await Widget.storage.getAsync(IPTV_SUBSCRIPTION_KEY, "");
+    else if (typeof Widget.storage.get === "function") raw = await Widget.storage.get(IPTV_SUBSCRIPTION_KEY, "");
+    if (!raw) return null;
+    var saved = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!saved || !/^https?:\/\/[^\s]+$/i.test(iptvText(saved.url))) return null;
+    return saved;
+  } catch (_) {
+    console.warn("IPTV：未能读取已保存的订阅");
+    return null;
+  }
+}
+
+async function iptvSaveSubscription(subscription) {
+  if (typeof Widget === "undefined" || !Widget.storage || typeof Widget.storage.set !== "function") {
+    console.warn("IPTV：当前运行环境未提供订阅存储，请在页面数据源参数中保存地址");
+    return;
+  }
+  try {
+    await Widget.storage.set(IPTV_SUBSCRIPTION_KEY, JSON.stringify(subscription));
+    console.log("IPTV：订阅已保存，下次地址留空即可使用");
+  } catch (_) {
+    console.warn("IPTV：未能保存订阅，请在页面数据源参数中保存地址");
+  }
+}
+
+async function iptvStorageRead(key) {
+  if (typeof Widget === "undefined" || !Widget.storage) return null;
+  try {
+    var raw;
+    if (typeof Widget.storage.getAsync === "function") raw = await Widget.storage.getAsync(key, "");
+    else if (typeof Widget.storage.get === "function") raw = await Widget.storage.get(key, "");
+    return raw ? (typeof raw === "string" ? JSON.parse(raw) : raw) : null;
+  } catch (_) { return null; }
+}
+
+async function iptvStorageWrite(key, value) {
+  if (typeof Widget === "undefined" || !Widget.storage || typeof Widget.storage.set !== "function") return;
+  try { await Widget.storage.set(key, JSON.stringify(value)); } catch (_) {}
+}
+
+function iptvLogoStyle(value, saved) {
+  value = iptvText(value);
+  if (!value || value === "saved") value = saved && saved.logoStyle ? saved.logoStyle : "dark";
+  return ["dark", "light", "black", "navy", "original"].indexOf(value) >= 0 ? value : "dark";
+}
+
+function iptvPublicLogo(value) {
+  var url = iptvText(value);
+  if (url === IPTV_DEFAULT_LOGO) return url;
+  // Public GitHub blob URLs frequently use ?raw=true; convert them to raw URLs.
+  var github = /^https:\/\/github\.com\/([^/?#]+)\/([^/?#]+)\/blob\/([^?#]+)(?:\?raw=(?:true|1))?$/i.exec(url);
+  if (github) url = "https://raw.githubusercontent.com/" + github[1] + "/" + github[2] + "/" + github[3];
+  var parsed = /^https:\/\/([^/?#]+)(\/[^?#]*)$/i.exec(url);
+  if (!parsed || parsed[1].indexOf("@") >= 0 || !/\.(?:png|jpe?g|webp|gif|svg)$/i.test(parsed[2])) return "";
+  var host = parsed[1].toLowerCase();
+  var staticSourceLogo = host === "garysclub.sharewithyou.dpdns.org" && parsed[2].indexOf("/logos/") === 0;
+  if (!staticSourceLogo && IPTV_PUBLIC_LOGO_HOSTS.indexOf(host) < 0) return "";
+  return url;
+}
+
+function iptvArtwork(logo, style) {
+  logo = iptvText(logo);
+  if (style === "original") return { poster: logo, backdrop: logo };
+  var publicLogo = iptvPublicLogo(logo);
+  if (!publicLogo) return { poster: logo, backdrop: logo };
+  var colors = { dark: "23324B", light: "F1F4F8", black: "11151C", navy: "10243C" };
+  var color = colors[style] || colors.dark;
+  // The default SVG is 24px; allow it to scale, while preserving source logos.
+  var base = "https://wsrv.nl/?url=" + encodeURIComponent(publicLogo) +
+    "&fit=contain&a=center" + (publicLogo === IPTV_DEFAULT_LOGO ? "" : "&we") +
+    "&bg=" + color + "&cbg=" + color + "&output=png";
+  return { poster: base + "&w=480&h=720", backdrop: base + "&w=960&h=540" };
+}
+
+function iptvSearchText(value) {
+  var text = iptvText(value).toLowerCase();
+  // Fold full-width Latin characters and punctuation used in channel names.
+  text = text.replace(/[\uFF01-\uFF5E]/g, function (char) { return String.fromCharCode(char.charCodeAt(0) - 65248); });
+  return text.replace(/[\s._\-–—]+/g, "").toLowerCase();
+}
+
+function iptvMatchesChannel(channel, query) {
+  var target = iptvSearchText([channel.title, channel.tvgName, channel.tvgId].join(" "));
+  var words = iptvText(query).split(/\s+/).map(iptvSearchText).filter(function (word) { return !!word; });
+  return words.every(function (word) { return target.indexOf(word) >= 0; });
+}
+
+function iptvHeaders(value, label) {
+  if (value == null || (typeof value === "string" && !value.trim())) return {};
+  var object = value;
+  if (typeof value === "string") {
+    try { object = JSON.parse(value); }
+    catch (_) { throw new Error(label + "必须是 JSON 对象，例如 {\"User-Agent\":\"MyPlayer\"}"); }
+  }
+  if (!object || Array.isArray(object) || typeof object !== "object") {
+    throw new Error(label + "必须是 JSON 对象");
+  }
+  var result = {};
+  Object.keys(object).forEach(function (key) {
+    var name = iptvText(key);
+    var val = object[key];
+    if (!/^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/.test(name) || typeof val !== "string" || /[\r\n]/.test(val)) {
+      throw new Error(label + "的名称或值无效；值须为字符串");
+    }
+    iptvSetHeader(result, name, val);
+  });
+  return result;
+}
+
+function iptvSetHeader(headers, name, value) {
+  Object.keys(headers).forEach(function (key) {
+    if (key.toLowerCase() === name.toLowerCase()) delete headers[key];
+  });
+  headers[name] = value;
+}
+
+function iptvMergeHeaders(first, second) {
+  var result = {};
+  [first || {}, second || {}].forEach(function (part) {
+    Object.keys(part).forEach(function (key) { iptvSetHeader(result, key, part[key]); });
+  });
+  return result;
+}
+
+function iptvDecode(value) {
+  try { return decodeURIComponent(value); } catch (_) { return value; }
+}
+
+// URL is not required: some widget sandboxes do not expose the URL constructor.
+function iptvResolve(value, base) {
+  value = iptvText(value);
+  if (/^https?:\/\//i.test(value)) return value;
+  var origin = /^(https?:)\/\/([^/?#]+)/i.exec(base);
+  if (!origin) return "";
+  if (value.indexOf("//") === 0) return origin[1] + value;
+  if (!value || /^[A-Za-z][A-Za-z0-9+.-]*:/.test(value)) return "";
+  var cleanBase = base.split(/[?#]/)[0];
+  if (value.charAt(0) === "?") return cleanBase + value;
+  if (value.charAt(0) === "#") return base.split("#")[0] + value;
+  var path = value.charAt(0) === "/" ? value : cleanBase.slice(origin[0].length).replace(/[^/]*$/, "") + value;
+  if (path.charAt(0) !== "/") path = "/" + path;
+  var suffixAt = path.search(/[?#]/);
+  var suffix = suffixAt < 0 ? "" : path.slice(suffixAt);
+  if (suffixAt >= 0) path = path.slice(0, suffixAt);
+  var directoryEnding = /(?:^|\/)\.{1,2}$/.test(path);
+  var parts = [];
+  path.split("/").forEach(function (part) {
+    if (part === "..") { if (parts.length > 1) parts.pop(); }
+    else if (part !== ".") parts.push(part);
+  });
+  var resolvedPath = parts.join("/") || "/";
+  if (directoryEnding && resolvedPath.charAt(resolvedPath.length - 1) !== "/") resolvedPath += "/";
+  return origin[0] + resolvedPath + suffix;
+}
+
+function iptvCommaOutsideQuotes(line) {
+  var quote = "";
+  for (var i = 0; i < line.length; i++) {
+    var char = line.charAt(i);
+    if (quote) { if (char === quote) quote = ""; }
+    else if (char === '"' || char === "'") quote = char;
+    else if (char === ",") return i;
+  }
+  return -1;
+}
+
+function iptvAttributes(line) {
+  var attrs = {};
+  var pattern = /([A-Za-z0-9_-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s,]+))/g;
+  var match;
+  while ((match = pattern.exec(line))) attrs[match[1].toLowerCase()] = match[2] != null ? match[2] : match[3] != null ? match[3] : match[4];
+  return attrs;
+}
+
+function iptvUrlAndHeaders(line, base) {
+  var at = line.indexOf("|");
+  var headers = {};
+  if (at >= 0) {
+    line.slice(at + 1).split("&").forEach(function (pair) {
+      var eq = pair.indexOf("=");
+      if (eq < 1) return;
+      var name = iptvDecode(pair.slice(0, eq));
+      var val = iptvDecode(pair.slice(eq + 1));
+      if (/^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/.test(name) && !/[\r\n]/.test(val)) iptvSetHeader(headers, name, val);
+    });
+    line = line.slice(0, at);
+  }
+  return { url: iptvResolve(line, base), headers: headers };
+}
+
+function iptvHash(value) {
+  var hash = 2166136261;
+  for (var i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16);
+}
+
+function parseIPTVPlaylist(content, sourceUrl, playbackHeaders) {
+  content = String(content || "").replace(/^\uFEFF/, "");
+  // APTV channel lists also use #EXT-X-APTV-* extensions. Only standard
+  // structural HLS tags identify a single media/master playlist.
+  if (/^\s*#EXT-X-(?:TARGETDURATION|STREAM-INF|I-FRAME-STREAM-INF|MEDIA-SEQUENCE|PLAYLIST-TYPE)\s*:/im.test(content)) {
+    return [{ title: "直播", group: "未分组", logo: "", url: sourceUrl, headers: playbackHeaders || {} }];
+  }
+  if (/^\s*(?:<!doctype|<html)/i.test(content)) throw new Error("订阅地址返回了网页，请填写直播列表的直链");
+  var channels = [];
+  var pending = null;
+  var txtGroup = "未分组";
+  content.split(/\r\n|\n|\r/).forEach(function (raw) {
+    var line = raw.trim();
+    if (!line) return;
+    if (/^#EXTINF:/i.test(line)) {
+      var comma = iptvCommaOutsideQuotes(line);
+      var attrs = iptvAttributes(comma < 0 ? line : line.slice(0, comma));
+      pending = {
+        title: (comma < 0 ? "" : line.slice(comma + 1).trim()) || attrs["tvg-name"] || "直播",
+        tvgName: attrs["tvg-name"] || "", tvgId: attrs["tvg-id"] || "",
+        group: attrs["group-title"] || "未分组",
+        logo: attrs["tvg-logo"] ? iptvResolve(attrs["tvg-logo"], sourceUrl) : "",
+        headers: {}
+      };
+      return;
+    }
+    if (/^#EXTGRP:/i.test(line) && pending) { pending.group = line.slice(8).trim() || "未分组"; return; }
+    var vlc = /^#EXTVLCOPT:(http-user-agent|http-referrer|http-referer|http-origin)=(.*)$/i.exec(line);
+    if (vlc && pending) {
+      var names = { "http-user-agent": "User-Agent", "http-referrer": "Referer", "http-referer": "Referer", "http-origin": "Origin" };
+      iptvSetHeader(pending.headers, names[vlc[1].toLowerCase()], vlc[2].trim());
+      return;
+    }
+    if (line.charAt(0) === "#") return;
+    if (!pending) {
+      var split = line.indexOf(",");
+      if (split < 0) return;
+      var name = line.slice(0, split).trim();
+      var rest = line.slice(split + 1).trim();
+      if (rest === "#genre#") { txtGroup = name || "未分组"; return; }
+      if (!/^https?:\/\//i.test(rest)) return;
+      pending = { title: name || "直播", group: txtGroup, logo: "", headers: {} };
+      line = rest;
+    }
+    var parsed = iptvUrlAndHeaders(line, sourceUrl);
+    if (parsed.url) {
+      pending.url = parsed.url;
+      // Channel headers override the user-supplied defaults.
+      pending.headers = iptvMergeHeaders(iptvMergeHeaders(playbackHeaders, pending.headers), parsed.headers);
+      channels.push(pending);
+    }
+    pending = null;
+  });
+  return channels;
+}
+
+function iptvChannelId(channel, sourceUrl) {
+  var identity = sourceUrl + "\n" + channel.group + "\n" + channel.title + "\n" + channel.url + "\n" + JSON.stringify(channel.headers);
+  return "iptv." + iptvHash(identity);
+}
+
+function iptvHasValue(value) {
+  return value != null && !(typeof value === "string" && !value.trim());
+}
+
+function iptvOwn(object, key) {
+  return !!object && Object.prototype.hasOwnProperty.call(object, key);
+}
+
+function iptvChoice(params, name, saved, choices, fallback) {
+  var value = iptvText(params[name]);
+  if (!value || value === "saved") value = saved && saved[name] || fallback;
+  if (choices.indexOf(value) < 0) throw new Error("参数无效：" + name);
+  return value;
+}
+
+function iptvTerms(value, label) {
+  if (!iptvHasValue(value)) return [];
+  if (typeof value === "string") {
+    if (value.trim().charAt(0) === "[") {
+      try { value = JSON.parse(value); } catch (_) { throw new Error(label + "的 JSON 格式无效"); }
+    } else value = value.split(/\r\n|\n|\r|;|；/);
+  }
+  if (!Array.isArray(value) || value.some(function (v) { return typeof v !== "string"; })) throw new Error(label + "须为名称列表");
+  return value.map(iptvText).filter(function (v) { return !!iptvSearchText(v); });
+}
+
+function iptvAliases(value) {
+  if (!iptvHasValue(value)) return {};
+  if (typeof value === "string") {
+    try { value = JSON.parse(value); } catch (_) { throw new Error("频道别名须为 JSON 对象"); }
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("频道别名须为 JSON 对象");
+  var result = Object.create(null);
+  Object.keys(value).forEach(function (key) {
+    if (typeof value[key] !== "string") throw new Error("频道别名的值须为字符串");
+    if (iptvText(key) && iptvText(value[key])) result[iptvText(key)] = iptvText(value[key]);
+  });
+  return result;
+}
+
+function iptvHttpURL(value, label) {
+  var url = iptvText(value);
+  if (!/^https?:\/\/[^\s]+$/i.test(url)) throw new Error(label + "请填写 HTTP/HTTPS 地址");
+  return url;
+}
+
+function iptvSettings(params, saved, subscription) {
+  saved = saved || {};
+  var result = {
+    merge_channels: iptvChoice(params, "merge_channels", saved, ["on", "off"], "off"),
+    preferred_quality: iptvChoice(params, "preferred_quality", saved, ["source", "uhd", "hd"], "source"),
+    clean_names: iptvChoice(params, "clean_names", saved, ["on", "off"], "on"),
+    epg_mode: iptvChoice(params, "epg_mode", saved, ["off", "detail", "title"], "detail"),
+    epg_timezone: iptvChoice(params, "epg_timezone", saved, ["+0800", "+0000", "local"], "+0800"),
+    logoStyle: iptvLogoStyle(params.logo_style, subscription),
+    favorite_channels: iptvTerms(iptvHasValue(params.favorite_channels) ? params.favorite_channels : saved.favorite_channels, "常看名单"),
+    name_aliases: iptvAliases(iptvHasValue(params.name_aliases) ? params.name_aliases : saved.name_aliases),
+    fallback_logo_url: iptvText(params.fallback_logo_url) || saved.fallback_logo_url || IPTV_DEFAULT_LOGO,
+    epg_url: iptvText(params.epg_url) || saved.epg_url || "",
+    epg_headers: iptvHeaders(iptvHasValue(params.epg_headers) ? params.epg_headers : saved.epg_headers, "节目单请求头")
+  };
+  if (result.fallback_logo_url === "default") result.fallback_logo_url = IPTV_DEFAULT_LOGO;
+  iptvHttpURL(result.fallback_logo_url, "备用台标");
+  // Entering another EPG address starts with its own credentials, never a prior feed's.
+  if (iptvText(params.epg_url) && !iptvHasValue(params.epg_headers)) result.epg_headers = {};
+  if (result.epg_url === "auto") { result.epg_url = ""; result.epg_headers = {}; }
+  if (result.epg_url) iptvHttpURL(result.epg_url, "节目单");
+  return result;
+}
+
+function iptvSource(input, index) {
+  if (typeof input === "string") input = { url: input };
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("每个订阅须为地址或对象");
+  var epgUrl = iptvText(input.epg_url || input.epgUrl);
+  return {
+    name: iptvText(input.name) || "订阅" + (index + 1),
+    url: iptvHttpURL(input.url, "直播订阅"),
+    subscriptionHeaders: iptvHeaders(input.subscription_headers || input.subscriptionHeaders, "订阅请求头"),
+    playbackHeaders: iptvHeaders(input.playback_headers || input.playbackHeaders, "播放请求头"),
+    epgUrl: epgUrl ? iptvHttpURL(epgUrl, "节目单") : "",
+    epgHeaders: iptvHeaders(input.epg_headers || input.epgHeaders, "节目单请求头")
+  };
+}
+
+function iptvConfiguredSources(params, saved) {
+  var explicit = iptvHasValue(params.sources_json) || !!iptvText(params.playlist_url);
+  var list;
+  if (iptvHasValue(params.sources_json)) {
+    list = params.sources_json;
+    if (typeof list === "string") {
+      try { list = JSON.parse(list); } catch (_) { throw new Error("多订阅须为 JSON 数组"); }
+    }
+    if (!Array.isArray(list) || !list.length || list.length > 8) throw new Error("多订阅须包含 1 至 8 个订阅");
+  } else if (iptvText(params.playlist_url)) {
+    list = [{ url: params.playlist_url, subscription_headers: params.subscription_headers, playback_headers: params.playback_headers }];
+  } else if (saved) {
+    list = Array.isArray(saved.sources) && saved.sources.length ? saved.sources : [saved];
+  } else throw new Error("首次使用请填写 HTTP/HTTPS 直播订阅地址，运行成功后会保存");
+  var sources = list.map(iptvSource);
+  if (!explicit) {
+    if (iptvHasValue(params.subscription_headers)) sources[0].subscriptionHeaders = iptvHeaders(params.subscription_headers, "订阅请求头");
+    if (iptvHasValue(params.playback_headers)) sources[0].playbackHeaders = iptvHeaders(params.playback_headers, "播放请求头");
+  }
+  return { sources: sources, explicit: explicit };
+}
+
+async function iptvParallel(list, task, limit) {
+  var next = 0, results = new Array(list.length);
+  async function worker() {
+    while (next < list.length) {
+      var index = next++;
+      results[index] = await task(list[index], index);
+    }
+  }
+  var workers = [];
+  for (var i = 0; i < Math.min(limit || 4, list.length); i++) workers.push(worker());
+  await Promise.all(workers);
+  return results;
+}
+
+function iptvDeclaredEPG(content, sourceUrl) {
+  var line = String(content).split(/\r\n|\n|\r/).filter(function (v) { return /^\s*#EXTM3U/i.test(v); })[0] || "";
+  var attrs = iptvAttributes(line);
+  var value = attrs["x-tvg-url"] || attrs["url-tvg"] || attrs["tvg-url"] || "";
+  // A header may declare several feeds; this source uses the first one.
+  value = value.split(/,\s*(?=https?:\/\/)/i)[0];
+  return value ? iptvResolve(value, sourceUrl) : "";
+}
+
+async function iptvFetchSource(source, index) {
+  var identity = source.url + "\n" + JSON.stringify(source.subscriptionHeaders);
+  var key = index === 0 ? IPTV_PLAYLIST_CACHE_KEY : IPTV_PLAYLIST_CACHE_KEY + "." + iptvHash(identity);
+  var cached = await iptvStorageRead(key);
+  var hit = cached && cached.identity === identity && cached.expiresAt > Date.now() && typeof cached.content === "string" && cached.content;
+  var content = hit ? cached.content : "";
+  if (!content) {
+    var response;
+    try { response = await Widget.http.get(source.url, { headers: source.subscriptionHeaders, timeout: 25000 }); }
+    catch (_) { throw new Error("下载订阅失败，请检查地址、网络和订阅请求头"); }
+    if (!response || response.ok === false || Number(response.status) >= 400) {
+      throw new Error("订阅请求失败，HTTP " + (response ? Number(response.status) || 0 : 0));
+    }
+    if (typeof response.data !== "string" || !response.data.trim()) throw new Error("订阅内容为空或不是文本列表");
+    content = response.data;
+  }
+  var channels = parseIPTVPlaylist(content, source.url, source.playbackHeaders);
+  if (!channels.length) throw new Error("未找到 HTTP/HTTPS 频道，请确认地址是 M3U、M3U8 或 TXT 直播列表");
+  if (!hit) await iptvStorageWrite(key, { identity: identity, expiresAt: Date.now() + 120000, content: content });
+  var epgUrl = source.epgUrl || iptvDeclaredEPG(content, source.url);
+  var occurrences = {};
+  channels.forEach(function (channel) {
+    var base = iptvChannelId(channel, source.url);
+    var count = (occurrences[base] || 0) + 1;
+    occurrences[base] = count;
+    channel.id = base + (count > 1 ? "." + count : "");
+    channel.sourceName = source.name;
+    channel.sourceOrder = index;
+    channel.epgRef = epgUrl ? { url: epgUrl, headers: source.epgHeaders } : null;
+  });
+  return channels;
+}
+
+async function iptvLibrary(params) {
+  var saved = await iptvReadSubscription();
+  var preferences = await iptvStorageRead(IPTV_SETTINGS_KEY);
+  var settings = iptvSettings(params, preferences, saved);
+  var configured = iptvConfiguredSources(params, saved);
+  var fetched = await iptvParallel(configured.sources, async function (source, index) {
+    try { return { channels: await iptvFetchSource(source, index) }; }
+    catch (error) {
+      console.error("IPTV：第 " + (index + 1) + " 个订阅读取失败");
+      return { error: error };
+    }
+  });
+  var failure = fetched.filter(function (v) { return !!v.error; });
+  if (failure.length && (configured.explicit || failure.length === fetched.length)) throw failure[0].error;
+  if (failure.length) console.warn("IPTV：部分订阅暂不可用，显示其他订阅的频道");
+  var current = {
+    url: configured.sources[0].url,
+    subscriptionHeaders: configured.sources[0].subscriptionHeaders,
+    playbackHeaders: configured.sources[0].playbackHeaders,
+    logoStyle: settings.logoStyle,
+    sources: configured.sources
+  };
+  // Do not replace a working configuration when a new multi-source setup fails.
+  if (JSON.stringify(saved) !== JSON.stringify(current)) await iptvSaveSubscription(current);
+  if (JSON.stringify(preferences) !== JSON.stringify(settings)) await iptvStorageWrite(IPTV_SETTINGS_KEY, settings);
+  var channels = [];
+  var ids = {};
+  fetched.forEach(function (result) {
+    (result.channels || []).forEach(function (channel) {
+      var original = channel.id;
+      ids[original] = (ids[original] || 0) + 1;
+      if (ids[original] > 1) channel.id += ".source" + channel.sourceOrder;
+      channels.push(channel);
+    });
+  });
+  return { channels: channels, settings: settings };
+}
+
+function iptvCleanName(value) {
+  return iptvText(value).replace(/[\uFF01-\uFF5E]/g, function (c) { return String.fromCharCode(c.charCodeAt(0) - 65248); })
+    .replace(/\s+/g, " ").replace(/\s*[\[【(（](?:线路\s*\d+|备用(?:线路)?\s*\d*|主线|备用源)[\]】)）]\s*/g, " ").trim();
+}
+
+function iptvBaseName(value) {
+  var name = iptvCleanName(value);
+  var suffix = /(?:[\s._\-–—]+|[\[【(（])(?:4k|8k|uhd|fhd|hd|sd|hdtv|720p|1080p|2160p|标清|高清|超清|蓝光|线路\s*\d+|备用(?:线路)?\s*\d*)[\]】)）]?\s*$/i;
+  var old;
+  do { old = name; name = name.replace(suffix, "").trim(); } while (old !== name);
+  return name || iptvCleanName(value);
+}
+
+function iptvQuality(channel) {
+  var text = [channel.title, channel.tvgName, channel.group].join(" ");
+  if (/(?:\b(?:4k|8k|uhd|2160p)\b|超高清)/i.test(text)) return "4K";
+  if (/(?:\b(?:fhd|hd|hdtv|720p|1080p)\b|高清|超清|蓝光)/i.test(text)) return "HD";
+  if (/(?:\bsd\b|标清)/i.test(text)) return "SD";
+  return "";
+}
+
+function iptvDecorate(channel, settings) {
+  var aliases = settings.name_aliases;
+  var alias = iptvOwn(aliases, channel.tvgId) ? aliases[channel.tvgId] : iptvOwn(aliases, channel.title) ? aliases[channel.title] : "";
+  channel.displayTitle = alias || (settings.clean_names === "on" ? iptvCleanName(channel.title) : channel.title);
+  channel.baseTitle = iptvBaseName(channel.displayTitle);
+  channel.quality = iptvQuality(channel);
+  channel.favoriteOrder = settings.favorite_channels.length;
+  settings.favorite_channels.some(function (term, index) {
+    if (iptvMatchesChannel(channel, term) || iptvSearchText(channel.displayTitle).indexOf(iptvSearchText(term)) >= 0) {
+      channel.favoriteOrder = index; return true;
+    }
+    return false;
+  });
+  return channel;
+}
+
+function iptvCategory(channel, category) {
+  var text = [channel.title, channel.displayTitle, channel.tvgName, channel.group].join(" ");
+  var patterns = {
+    sports: /sports?|体育|足球|篮球|网球|高尔夫|赛车|英超|欧冠|\b(?:espn|bein|nba|nfl|f1|dazn|eurosport)\b/i,
+    documentary: /纪录|纪实|地理|探索|自然|历史|documentary|discovery|national\s*geographic|nat\s*geo|nature|clarity|history/i,
+    cctv: /cctv|央视|中央电视/i, satellite: /卫视/, news: /新闻|news|\b(?:cnn|cnbc|bbc\s*world|cgtn)\b/i,
+    kids: /少儿|儿童|卡通|动漫|kids|cartoon|nickelodeon|disney/i
+  };
+  if (!category || category === "all") return true;
+  if (category === "uhd") return channel.quality === "4K";
+  return !!patterns[category] && patterns[category].test(text);
+}
+
+function iptvGroups(channels, settings, merge) {
+  var grouped = [], positions = Object.create(null);
+  channels.forEach(function (channel) {
+    iptvDecorate(channel, settings);
+    var key = iptvSearchText(channel.baseTitle);
+    if (!merge || !iptvOwn(positions, key)) {
+      var group = { id: channel.id, title: channel.displayTitle, baseTitle: channel.baseTitle, members: [], channel: channel };
+      if (merge) positions[key] = grouped.length;
+      grouped.push(group);
+    }
+    var target = merge ? grouped[positions[key]] : grouped[grouped.length - 1];
+    // Exact duplicate streams need only one selectable line within a merged card.
+    if (!target.members.some(function (member) { return member.url === channel.url && JSON.stringify(member.headers) === JSON.stringify(channel.headers); })) target.members.push(channel);
+  });
+  grouped.forEach(function (group) {
+    if (merge && group.members.length > 1) group.title = group.baseTitle;
+    group.favoriteOrder = Math.min.apply(Math, group.members.map(function (member) { return member.favoriteOrder; }));
+    group.logo = group.members.map(function (member) { return member.logo; }).filter(Boolean)[0] || "";
+    group.groups = group.members.map(function (member) { return member.group; }).filter(function (value, index, array) { return array.indexOf(value) === index; });
+  });
+  return grouped;
+}
+
+function iptvXmlDecode(value) {
+  return String(value).replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, function (whole, entity) {
+    var known = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
+    if (known[entity]) return known[entity];
+    var number = entity.charAt(1).toLowerCase() === "x" ? parseInt(entity.slice(2), 16) : parseInt(entity.slice(1), 10);
+    return number > 0 && number <= 0x10ffff ? String.fromCodePoint(number) : whole;
+  });
+}
+
+function iptvXmlAttrs(value) {
+  var attrs = Object.create(null), match;
+  var pattern = /([A-Za-z_:][A-Za-z0-9_:.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+  while ((match = pattern.exec(value))) attrs[match[1]] = iptvXmlDecode(match[2] == null ? match[3] : match[2]);
+  return attrs;
+}
+
+function iptvXmlText(value) {
+  var parts = [], match;
+  var pattern = /<!\[CDATA\[([\s\S]*?)\]\]>|([^<]+)|<[^>]*>/g;
+  while ((match = pattern.exec(value))) {
+    if (match[1] != null) parts.push(match[1]);
+    else if (match[2]) parts.push(iptvXmlDecode(match[2]));
+  }
+  return parts.join("").replace(/\s+/g, " ").trim();
+}
+
+function iptvXmlValues(body, tag) {
+  var values = [], match, pattern = new RegExp("<" + tag + "\\b[^>]*>([\\s\\S]*?)<\\/" + tag + "\\s*>", "gi");
+  while ((match = pattern.exec(body))) values.push(iptvXmlText(match[1]));
+  return values;
+}
+
+function iptvXmlTime(value) {
+  var match = /^(\d{4})(\d{2})(\d{2})(?:(\d{2})(?:(\d{2})(\d{2})?)?)?\s*(Z|UTC|GMT|BST|[+-]\d{4})?$/.exec(iptvText(value));
+  if (!match) return null;
+  var y = +match[1], m = +match[2], d = +match[3], h = +(match[4] || 0), min = +(match[5] || 0), sec = +(match[6] || 0);
+  var utc = Date.UTC(y, m - 1, d, h, min, sec), check = new Date(utc);
+  if (check.getUTCFullYear() !== y || check.getUTCMonth() !== m - 1 || check.getUTCDate() !== d || h > 23 || min > 59 || sec > 59) return null;
+  var zone = match[7] || "+0000";
+  if (zone === "BST") zone = "+0100";
+  if (/^[+-]/.test(zone)) {
+    if (+zone.slice(1, 3) > 23 || +zone.slice(3) > 59) return null;
+    var offset = (+zone.slice(1, 3) * 60 + +zone.slice(3)) * 60000;
+    utc -= zone.charAt(0) === "-" ? -offset : offset;
+  }
+  return utc;
+}
+
+function iptvParseXMLTV(xml, now) {
+  if (typeof xml !== "string" || !/<tv(?:\s|>)/i.test(xml) || !/<\/tv\s*>/i.test(xml)) throw new Error("节目单不是 XMLTV 文本");
+  now = now == null ? Date.now() : now;
+  xml = xml.replace(/<!--[\s\S]*?-->/g, "");
+  var result = { channels: Object.create(null), names: Object.create(null) }, match;
+  var channelPattern = /<channel\b([^>]*)>([\s\S]*?)<\/channel\s*>/gi;
+  while ((match = channelPattern.exec(xml))) {
+    var attrs = iptvXmlAttrs(match[1]), id = attrs.id;
+    if (!id) continue;
+    var icon = /<icon\b([^>]*?)\/?\s*>/i.exec(match[2]);
+    result.channels[id] = { names: iptvXmlValues(match[2], "display-name"), logo: icon ? iptvXmlAttrs(icon[1]).src || "" : "", programmes: [] };
+  }
+  var programmePattern = /<programme\b([^>]*)>([\s\S]*?)<\/programme\s*>/gi;
+  while ((match = programmePattern.exec(xml))) {
+    var info = iptvXmlAttrs(match[1]), start = iptvXmlTime(info.start), stop = info.stop ? iptvXmlTime(info.stop) : null;
+    if (!info.channel || start == null || start < now - 86400000 || start > now + 7 * 86400000) continue;
+    if (info.stop && (stop == null || stop <= start)) continue;
+    var titles = iptvXmlValues(match[2], "title");
+    if (!titles[0]) continue;
+    if (!iptvOwn(result.channels, info.channel)) result.channels[info.channel] = { names: [], logo: "", programmes: [] };
+    result.channels[info.channel].programmes.push({ start: start, stop: stop, title: titles[0], description: iptvXmlValues(match[2], "desc")[0] || "" });
+  }
+  Object.keys(result.channels).forEach(function (id) {
+    var entry = result.channels[id];
+    entry.programmes.sort(function (a, b) { return a.start - b.start; });
+    entry.programmes.forEach(function (programme, index) {
+      if (!programme.stop && entry.programmes[index + 1]) programme.stop = entry.programmes[index + 1].start;
+    });
+    [id].concat(entry.names).forEach(function (name) {
+      var normalized = iptvSearchText(name);
+      if (iptvOwn(result.names, normalized) && result.names[normalized] !== id) result.names[normalized] = null;
+      else result.names[normalized] = id;
+    });
+  });
+  return result;
+}
+
+async function iptvFetchEPG(ref) {
+  var identity = ref.url + "\n" + JSON.stringify(ref.headers || {});
+  var key = "capyplayer.iptv.epgCache.v1." + iptvHash(identity);
+  var cached = await iptvStorageRead(key);
+  if (cached && cached.identity === identity && cached.expiresAt > Date.now() && cached.data && cached.data.channels) return cached.data;
+  try {
+    var response = await Widget.http.get(ref.url, { headers: ref.headers || {}, timeout: 6000 });
+    if (!response || response.ok === false || Number(response.status) >= 400) throw new Error("EPG HTTP");
+    var data = iptvParseXMLTV(response.data);
+    await iptvStorageWrite(key, { identity: identity, expiresAt: Date.now() + 300000, data: data });
+    return data;
+  } catch (_) {
+    console.warn("IPTV：节目单暂不可用，频道仍可使用");
+    // Cache a short empty result to avoid retrying the same failed feed per page.
+    var empty = { channels: {}, names: {} };
+    await iptvStorageWrite(key, { identity: identity, expiresAt: Date.now() + 60000, data: empty });
+    return empty;
+  }
+}
+
+function iptvFindEPG(data, channel, now) {
+  var id = iptvOwn(data.channels, channel.tvgId) ? channel.tvgId : "";
+  if (!id) [channel.tvgName, channel.title, channel.displayTitle, channel.baseTitle].some(function (name) {
+    var normalized = iptvSearchText(name);
+    if (iptvOwn(data.names, normalized) && data.names[normalized]) { id = data.names[normalized]; return true; }
+    return false;
+  });
+  if (!id || !iptvOwn(data.channels, id)) return null;
+  var entry = data.channels[id], current = null, next = null;
+  entry.programmes.forEach(function (programme) {
+    if (programme.start <= now && programme.stop > now) current = programme;
+    else if (programme.start > now && (!next || programme.start < next.start)) next = programme;
+  });
+  return { current: current, next: next, logo: entry.logo };
+}
+
+async function iptvEnrichEPG(groups, settings) {
+  if (settings.epg_mode === "off" || !groups.length) return;
+  var refs = [], identities = {};
+  groups.forEach(function (group) {
+    group.members.forEach(function (channel) {
+      var ref = settings.epg_url ? { url: settings.epg_url, headers: settings.epg_headers } : channel.epgRef;
+      if (!ref) return;
+      var identity = ref.url + "\n" + JSON.stringify(ref.headers || {});
+      channel.epgIdentity = identity;
+      if (!iptvOwn(identities, identity)) { identities[identity] = refs.length; refs.push(ref); }
+    });
+  });
+  var data = await iptvParallel(refs, iptvFetchEPG, 4), now = Date.now();
+  groups.forEach(function (group) {
+    group.members.some(function (channel) {
+      if (!channel.epgIdentity) return false;
+      var epg = iptvFindEPG(data[identities[channel.epgIdentity]], channel, now);
+      if (!epg) return false;
+      if (!group.logo && /^https?:\/\//i.test(epg.logo)) group.logo = epg.logo;
+      if (epg.current || epg.next) { group.epg = epg; return true; }
+      return false;
+    });
+  });
+}
+
+function iptvTimeLabel(timestamp, timezone) {
+  var local = timezone === "local", offset = local ? 0 : (timezone.charAt(0) === "-" ? -1 : 1) * (+timezone.slice(1, 3) * 60 + +timezone.slice(3)) * 60000;
+  var date = new Date(timestamp + offset);
+  var hour = local ? date.getHours() : date.getUTCHours(), minute = local ? date.getMinutes() : date.getUTCMinutes();
+  return (hour < 10 ? "0" : "") + hour + ":" + (minute < 10 ? "0" : "") + minute;
+}
+
+function iptvGroupDescription(group, settings) {
+  var text = "直播 · " + group.groups.join(" / ");
+  if (group.members.length > 1) text += "\n" + group.members.length + " 条线路 · " + group.members.map(function (line) { return line.sourceName + (line.quality ? " " + line.quality : ""); }).filter(function (v, i, a) { return a.indexOf(v) === i; }).join(" / ");
+  if (group.title !== group.channel.title) text += "\n原名：" + group.channel.title;
+  if (group.epg) [ ["正在播", group.epg.current], ["下一档", group.epg.next] ].forEach(function (entry) {
+    if (!entry[1]) return;
+    var programme = entry[1];
+    text += "\n" + entry[0] + " " + iptvTimeLabel(programme.start, settings.epg_timezone) +
+      (programme.stop ? "–" + iptvTimeLabel(programme.stop, settings.epg_timezone) : "") + " " + programme.title;
+    if (entry[0] === "正在播" && programme.description) text += "\n" + programme.description;
+  });
+  return text;
+}
+
+function iptvPreferredLine(members, preferred) {
+  var index = members.findIndex(function (member) { return preferred === "uhd" ? member.quality === "4K" : preferred === "hd" ? member.quality === "HD" : false; });
+  return index < 0 ? 0 : index;
+}
+
+function iptvGroupItem(group, settings) {
+  var selected = iptvPreferredLine(group.members, settings.preferred_quality), line = group.members[selected];
+  var lines = group.members.slice();
+  if (selected > 0) { lines.splice(selected, 1); lines.unshift(line); }
+  var artwork = iptvArtwork(group.logo || settings.fallback_logo_url, settings.logoStyle);
+  var title = group.title;
+  if (settings.epg_mode === "title" && group.epg && group.epg.current) title += " · " + group.epg.current.title;
+  var item = { id: group.id, title: title, mediaType: "movie", description: iptvGroupDescription(group, settings), posterUrl: artwork.poster, backdropUrl: artwork.backdrop };
+  if (group.members.length > 1 || group.epg || Object.keys(line.headers || {}).length) {
+    item.type = "link";
+    item.link = IPTV_DETAIL_PREFIX + encodeURIComponent(JSON.stringify({
+      id: item.id, title: item.title, url: line.url, headers: line.headers,
+      logo: group.logo || settings.fallback_logo_url, group: group.groups.join(" / "), description: item.description,
+      logoStyle: settings.logoStyle,
+      lines: lines.slice(0, 30).map(function (member, index) { return {
+        id: member.id, title: member.sourceName + " · " + (member.quality || "原画") + " · 线路" + (index + 1),
+        url: member.url, headers: member.headers, isDefault: index === 0
+      }; })
+    }));
+  } else { item.type = "url"; item.videoUrl = line.url; }
+  return item;
+}
+
+// Kept for older callers; normal list generation uses groups and settings.
+function iptvMediaItem(channel, sourceUrl, logoStyle) {
+  var settings = iptvSettings({ logo_style: logoStyle || "dark", epg_mode: "off" }, {}, null);
+  channel.id = channel.id || iptvChannelId(channel, sourceUrl);
+  channel.sourceName = channel.sourceName || "订阅1";
+  return iptvGroupItem(iptvGroups([channel], settings, false)[0], settings);
+}
+
+async function getChannels(params) {
+  params = params || {};
+  var state = await iptvLibrary(params), settings = state.settings;
+  var merge = params.only_multi === true || settings.merge_channels === "on";
+  var groups = iptvGroups(state.channels, settings, merge);
+  var groupFilter = iptvText(params.group_filter).toLowerCase(), keyword = iptvText(params.keyword || params.query);
+  groups = groups.filter(function (group) {
+    return (!params.only_multi || group.members.length > 1) &&
+      (!params.only_favorites || group.favoriteOrder < settings.favorite_channels.length) &&
+      group.members.some(function (channel) {
+        return (!groupFilter || channel.group.toLowerCase().indexOf(groupFilter) >= 0) && iptvCategory(channel, params.category_filter) &&
+          (!keyword || iptvMatchesChannel(channel, keyword) || iptvSearchText(channel.displayTitle).indexOf(iptvSearchText(keyword)) >= 0);
+      });
+  });
+  if (params.only_favorites) groups.sort(function (a, b) { return a.favoriteOrder - b.favoriteOrder; });
+  else if (params.sort_order === "name") groups.sort(function (a, b) { return a.title.localeCompare(b.title); });
+  var size = Math.max(1, Math.min(500, Math.floor(Number(params.page_size) || 100))), page = Math.max(1, Math.floor(Number(params.page) || 1));
+  if (!isFinite(page)) page = 1;
+  groups = groups.slice((page - 1) * size, page * size);
+  await iptvEnrichEPG(groups, settings);
+  return groups.map(function (group) { return iptvGroupItem(group, settings); });
+}
+
+async function search(params) {
+  if (typeof params === "string") params = { keyword: params };
+  params = params || {};
+  var keyword = iptvText(params.keyword || params.query || params.searchText);
+  if (!keyword || !iptvSearchText(keyword)) return [];
+  var options = {};
+  Object.keys(params).forEach(function (key) { options[key] = params[key]; });
+  options.keyword = keyword;
+  return getChannels(options);
+}
+
+async function searchChannels(params) { return search(params); }
+function iptvListOptions(params, category, extra) {
+  var options = {};
+  Object.keys(params || {}).forEach(function (key) { options[key] = params[key]; });
+  if (category) options.category_filter = category;
+  Object.keys(extra || {}).forEach(function (key) { options[key] = extra[key]; });
+  return options;
+}
+async function getSportsChannels(params) { return getChannels(iptvListOptions(params, "sports")); }
+async function getUHDChannels(params) { return getChannels(iptvListOptions(params, "uhd")); }
+async function getDocumentaryChannels(params) { return getChannels(iptvListOptions(params, "documentary")); }
+async function getCCTVChannels(params) { return getChannels(iptvListOptions(params, "cctv")); }
+async function getSatelliteChannels(params) { return getChannels(iptvListOptions(params, "satellite")); }
+async function getNewsChannels(params) { return getChannels(iptvListOptions(params, "news")); }
+async function getKidsChannels(params) { return getChannels(iptvListOptions(params, "kids")); }
+async function getFavoriteChannels(params) { return getChannels(iptvListOptions(params, null, { only_favorites: true })); }
+async function getMultiLineChannels(params) { return getChannels(iptvListOptions(params, null, { only_multi: true })); }
+async function getCategories() {
+  return [ ["all", "全部频道"], ["sports", "体育"], ["uhd", "4K / UHD"], ["documentary", "纪录片"], ["cctv", "央视"], ["satellite", "卫视"], ["news", "新闻"], ["kids", "少儿"] ].map(function (entry) {
+    return { id: entry[0], name: entry[1], params: { category_filter: entry[0], page: 1 } };
+  });
+}
+
+async function loadDetail(link) {
+  link = iptvText(link);
+  if (link.indexOf(IPTV_DETAIL_PREFIX) !== 0) throw new Error("无效的 IPTV 频道链接");
+  var channel;
+  try { channel = JSON.parse(decodeURIComponent(link.slice(IPTV_DETAIL_PREFIX.length))); }
+  catch (_) { throw new Error("IPTV 频道数据损坏，请刷新频道列表"); }
+  if (!channel || !/^https?:\/\/[^\s]+$/i.test(iptvText(channel.url))) throw new Error("无效的直播播放地址");
+  var headers = iptvHeaders(channel.headers, "播放请求头");
+  var artwork = iptvArtwork(channel.logo, channel.logoStyle || "dark");
+  var result = {
+    id: iptvText(channel.id), title: iptvText(channel.title) || "直播", mediaType: "movie",
+    description: iptvText(channel.description) || "直播 · " + (iptvText(channel.group) || "未分组"),
+    posterUrl: artwork.poster, backdropUrl: artwork.backdrop, videoUrl: channel.url, customHeaders: headers
+  };
+  var lines = Array.isArray(channel.lines) && channel.lines.length ? channel.lines.slice(0, 30) : [{ id: result.id + ".play", title: result.title, url: channel.url, headers: headers, isDefault: true }];
+  result.relatedVideos = lines.map(function (line, index) {
+    return { id: iptvText(line.id) || result.id + "." + index, title: iptvText(line.title) || "线路" + (index + 1), type: "url",
+      videoUrl: iptvHttpURL(line.url, "直播播放"), customHeaders: iptvHeaders(line.headers, "播放请求头"), posterUrl: result.posterUrl,
+      isDefault: line.isDefault === true };
+  });
+  if (lines.length > 1) result.playSources = result.relatedVideos.map(function (line) {
+    return { id: line.id, title: line.title, videoUrl: line.videoUrl, customHeaders: line.customHeaders, isDefault: line.isDefault };
+  });
+  return result;
+}
